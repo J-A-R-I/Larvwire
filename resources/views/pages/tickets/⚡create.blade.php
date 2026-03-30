@@ -6,10 +6,10 @@ new
 #[Layout('layouts.app')]
 class extends Component
 {
-    public string $subject = ''; // onderwerp van het ticket
-    public string $description = ''; // beschrijving van het probleem
-    public string $priority = 'medium'; // standaard prioriteit
-    public string $status = 'op en'; // standaard status
+    public string $subject = '';
+    public string $description = '';
+    public string $priority = 'medium';
+    public string $status = 'open';
     protected array $rules = [
         'subject' => 'required|min:3|max:255',
         'description' => 'required|min:10',
@@ -29,13 +29,19 @@ class extends Component
     ];
     public function save(): void
     {
-        $validated = $this->validate(); // valideer alle velden
-        Ticket::create($validated); // bewaar het ticket in de database
-        session()->flash('success', 'Het ticket werd succesvol aangemaakt.');
-        $this->reset('subject', 'description'); // reset tekstvelden
-        $this->priority = 'medium'; // standaard prioriteit herstellen
-        $this->status = 'open'; // standaard status herstellen
-    }
+        $validated = $this->validate();
+        $ticket = Ticket::create($validated); // NIEUW: we bewaren het aangemaakte ticket eerst in een variabele zodat we er meteen activity logging op kunnen uitvoeren
+$ticket->logActivity(
+    'ticket_created',
+    'Ticket aangemaakt',
+
+'Het ticket werd voor het eerst opgeslagen in het systeem.'
+); // NIEUW: na het aanmaken schrijven we onmiddellijk een eerste activity log weg voor dit ticket
+session()->flash('success', 'Het ticket werd succesvol aangemaakt.');
+$this->reset('subject', 'description');
+$this->priority = 'medium';
+$this->status = 'open';
+}
 };
 ?>
 <div class="min-h-screen bg-gray-100 py-10">
@@ -64,12 +70,11 @@ class extends Component
                         type="text"
                         wire:model="subject"
                         class="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm shadow-sm
-                         focus:border-blue-500 focus:outline-none focus:ring-2
-                         focus:ring-blue-500"
+                         focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
                         placeholder="Bijv. Fout bij aanmelden"
                     >
                     @error('subject')
-                    <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                    <p class="mt-2 text-sm text-red600">{{ $message }}</p>
                     @enderror
                 </div>
                 <div>
@@ -80,13 +85,12 @@ class extends Component
                         id="description"
                         rows="6"
                         wire:model="description"
-                        class="w-full rounded-lg border border-gray-300 px-4
-                        py-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 24
-                        focus:ring-blue-500"
-                        placeholder="Beschrijf het probleem zo duidelijk mogelijk..."
-                    ></textarea>
+                        class="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm shadow-sm focus:border-blue-500
+                         focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Beschrijf het probleem zo duidelijk mogelijk...">
+                    </textarea>
                     @error('description')
-                    <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                    <p class="mt-2 text-sm text-red600">{{ $message }}</p>
                     @enderror
                 </div>
                 <div class="grid gap-6 md:grid-cols-2">
@@ -97,16 +101,14 @@ class extends Component
                         <select
                             id="priority"
                             wire:model="priority"
-                            class="w-full rounded-lg border border-gray-300
-                            px-4 py-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none
-                            focus:ring-2 focus:ring-blue-500"
-                        >
+                            class="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm shadow-sm focus:border-blue-500
+                             focus:outline-none focus:ring-2 focus:ring-blue-500">
                             <option value="low">Laag</option>
                             <option value="medium">Normaal</option>
                             <option value="high">Hoog</option>
                         </select>
                         @error('priority')
-                        <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                        <p class="mt-2 text-sm text-red600">{{ $message }}</p>
                         @enderror
                     </div>
                     <div>
@@ -117,11 +119,9 @@ class extends Component
                             id="status"
                             wire:model="status"
                             class="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm shadow-sm
-                             focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        >
+                             focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500">
                             <option value="open">Open</option>
-                            <option value="in_progress">In
-                                behandeling</option>
+                            <option value="in_progress">In behandeling</option>
                             <option value="closed">Gesloten</option>
                         </select>
                         @error('status')
@@ -133,9 +133,9 @@ class extends Component
                     <button
                         type="submit"
                         wire:loading.attr="disabled"
-                        class="inline-flex items-center rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition
-                        hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
+                        class="inline-flex items-center rounded-lg bg-blue600 px-5 py-3 text-sm font-semibold
+                        text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed
+                         disabled:opacity-50">
                         Ticket opslaan
                     </button>
                     <span wire:loading class="text-sm text-gray-500"> Bezig met opslaan...</span>

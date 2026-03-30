@@ -605,7 +605,7 @@ public function tickets()
                                         wire:target="changeStatus({{ $ticket->id }}, 'open')"
                                         class="inline-flex items-center rounded-lg border border-blue-200
                                         bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700
-                                        transition hover:bg-blue-100 disabled:cursor-not-alloweddisabled:opacity-50"
+                                        transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         Open
                                     </button>
@@ -692,7 +692,6 @@ public function tickets()
             </div>
             <div class="border-t border-gray-200 px-6 py-4">
                 {{ $this->tickets->links(data: ['scrollTo' => false]) }}
-                100
             </div>
         </div>
     </div>

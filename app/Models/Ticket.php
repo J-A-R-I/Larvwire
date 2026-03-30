@@ -1,66 +1,79 @@
-<?php // start van het modelbestand
-namespace App\Models; // namespace van het model
-use Illuminate\Database\Eloquent\Model; // basis Eloquent model
-use Illuminate\Database\Eloquent\Relations\HasMany; // typehint voor hasMany relaties
-class Ticket extends Model // Ticket model
+<?php
+namespace App\Models;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+class Ticket extends Model
 {
-    protected $fillable = [ // velden die via mass assignment ingevuld mogen worden
-        'subject', // onderwerp van het ticket
-        'description', // inhoud van het ticket
-        'status', // open, in_progress, closed
-        'priority', // low, medium, high
-        'attachment_path', // oud optioneel uploadpad uit eerdere modules
+    protected $fillable = [
+        'subject',
+        'description',
+        'status',
+        'priority',
+        'attachment_path',
     ];
-public function comments(): HasMany // relatie naar comments
-{
-    return $this->hasMany(Comment::class); // één ticket heeft meerdere comments
+    public function comments(): HasMany
+    {
+        return $this->hasMany(Comment::class);
+    }
+    public function attachments(): HasMany
+    {
+        return $this->hasMany(TicketAttachment::class);
+    }
+    public function activities(): HasMany
+    {
+        return $this->hasMany(TicketActivity::class);
+    }
+    public function logActivity(string $event, string $label, ?string
+                                       $description = null): void
+    {
+        $this->activities()->create([
+            'event' => $event,
+            'label' => $label,
+            'description' => $description,
+        ]); // NIEUW: deze helper centraliseert alle activity logging voor dit ticket op één plaats
 }
-public function attachments(): HasMany // relatie naar ticketbijlagen
-{
-    return $this->hasMany(TicketAttachment::class); // één ticket heeft meerdere attachments
-}
-public function statusLabel(): string // leesbaar label voor status
-{
-    return match ($this->status) { // zet technische status om naar leesbare tekst
-        'open' => 'Open', // label voor open tickets
-        'in_progress' => 'In behandeling', // label voor tickets in behandeling
-        'closed' => 'Gesloten', // label voor gesloten tickets
-        default => 'Onbekend', // fallback
-    };
-}
-public function statusBadgeClasses(): string // badgeclasses voor status
-{
-    return match ($this->status) { // kies classes op basis van status
-        'open' => 'bg-blue-100 text-blue-700', // blauw voor open
-        'in_progress' => 'bg-yellow-100 text-yellow-700', // geel voor in behandeling
-        'closed' => 'bg-green-100 text-green-700', // groen voor gesloten
-        default => 'bg-gray-100 text-gray-700', // fallback badge
-    };
-}
-public function priorityLabel(): string // leesbaar label voor prioriteit
-{
-    return match ($this->priority) { // zet technische prioriteit om naar leesbare tekst
-        'low' => 'Laag', // label voor lage prioriteit
-        'medium' => 'Normaal', // label voor normale prioriteit
-        'high' => 'Hoog', // label voor hoge prioriteit
-        default => 'Onbekend', // fallback
-    };
-}
-public function priorityBadgeClasses(): string // badgeclasses voor prioriteit
-{
-return match ($this->priority) { // kies classes op basis van prioriteit
-    'low' => 'bg-gray-100 text-gray-700', // neutraal voor laag
-    'medium' => 'bg-orange-100 text-orange-700', // oranje voor normaal
-    'high' => 'bg-red-100 text-red-700', // rood voor hoog
-    default => 'bg-gray-100 text-gray-700', // fallback badge
-};
-}
-public function isOpen(): bool // helper om te checken of ticket open is
-{
-    return $this->status === 'open'; // true als status open is
-}
-public function isClosed(): bool // helper om te checken of ticket gesloten is
-{
-    return $this->status === 'closed'; // true als status gesloten is
-}
+    public function statusLabel(): string
+    {
+        return match ($this->status) {
+            'open' => 'Open',
+            'in_progress' => 'In behandeling',
+            'closed' => 'Gesloten',
+            default => 'Onbekend',
+        };
+    }
+    public function statusBadgeClasses(): string
+    {
+        return match ($this->status) {
+            'open' => 'bg-blue-100 text-blue-700',
+            'in_progress' => 'bg-yellow-100 text-yellow-700',
+            'closed' => 'bg-green-100 text-green-700',
+            default => 'bg-gray-100 text-gray-700',
+        };
+    }
+    public function priorityLabel(): string
+    {
+        return match ($this->priority) {
+            'low' => 'Laag',
+            'medium' => 'Normaal',
+            'high' => 'Hoog',
+            default => 'Onbekend',
+        };
+    }
+    public function priorityBadgeClasses(): string
+    {
+        return match ($this->priority) {
+            'low' => 'bg-gray-100 text-gray-700',
+            'medium' => 'bg-orange-100 text-orange-700',
+            'high' => 'bg-red-100 text-red-700',
+            default => 'bg-gray-100 text-gray-700',
+        };
+    }
+    public function isOpen(): bool
+    {
+        return $this->status === 'open';
+    }
+    public function isClosed(): bool
+    {
+        return $this->status === 'closed';
+    }
 }
