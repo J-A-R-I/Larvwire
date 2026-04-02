@@ -27,7 +27,6 @@ $this->ticket->refresh(); // NIEUW: het ticketmodel refreshen zorgt ervoor dat d
 ?>
 <div class="mt-6 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-200">
     <div class="mb-4 flex items-center justify-between">
-        210
         <div>
             <h2 class="text-lg font-semibold text-gray-900">
                 Activity log

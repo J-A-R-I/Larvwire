@@ -1,11 +1,20 @@
 <?php
-use App\Models\Ticket; // nodig om tickets op te halen, updaten en verwijderen
-use App\Models\User; // //NIEUW: nodig om mogelijke assignees op te halen
-use Livewire\Attributes\Computed; // nodig om computed properties te gebruiken
-use Livewire\Attributes\Layout; // om de page aan de layout te koppelen
-use Livewire\Attributes\Url; // om filters in de URL te bewaren
+use App\Actions\Tickets\BulkCloseTicketsAction; // action voor bulk sluiten
+use App\Actions\Tickets\BulkDeleteTicketsAction; // action voor bulk verwijderen
+use App\Actions\Tickets\ChangeTicketStatusAction; // action voor snelle statuswijziging
+use App\Actions\Tickets\DeleteTicketAction; // action voor individueel verwijderen
+use App\Actions\Tickets\UpdateTicketAction; // action voor inline update
+use App\Models\Ticket; // nodig om ticket per id op te halen
+use App\Models\User; // nodig om assignees op te halen
+use App\Support\Tickets\TicketIndexQuery; // centrale querylaag voor index
+use App\TicketPriority; // enum voor prioriteit
+use App\TicketStatus; // enum voor status
+use App\TicketWorkflowStep; // enum voor workflow
+use Livewire\Attributes\Computed; // nodig voor computed properties
+use Livewire\Attributes\Layout; // koppelt page aan layout
+use Livewire\Attributes\Url; // bewaart filters in URL
 use Livewire\Component; // basis Livewire component
-use Livewire\WithPagination; // nodig voor Livewire pagination
+use Livewire\WithPagination; // pagination support
 new
 #[Layout('layouts.app')]
 class extends Component
@@ -18,275 +27,261 @@ class extends Component
     #[Url]
     public string $priority = ''; // filter op prioriteit
     #[Url]
-    public string $workflow = ''; // //NIEUW: filter op workflowstap
+    public string $workflow = ''; // filter op workflow
     #[Url(as: 'assignee')]
-    public string $assignedUser = ''; // //NIEUW: filter op toegewezen gebruiker
+    public string $assignedUser = ''; // filter op toegewezen gebruiker
     #[Url(as: 'sort')]
-    public string $sortField = 'created_at'; // standaard sorteren op aanmaakdatum
+    public string $sortField = 'created_at'; // standaard sorteren op created_at
     #[Url(as: 'dir')]
-    public string $sortDirection = 'desc'; // nieuwste tickets eerst tonen
+    public string $sortDirection = 'desc'; // standaard nieuwste eerst
     public int $perPage = 10; // aantal records per pagina
-    public array $selected = []; // ids van geselecteerde tickets voor bulkacties
-    public ?int $editingId = null; // welk ticket momenteel inline bewerkt wordt
-    public string $editSubject = ''; // tijdelijke onderwerpwaarde tijdens inline edit
-    public string $editStatus = 'open'; // tijdelijke statuswaarde tijdens inline edit
-    public string $editPriority = 'medium'; // tijdelijke prioriteitswaarde tijdens inline edit
-    public string $editWorkflow = 'new'; // //NIEUW: tijdelijke workflowwaarde tijdens inline edit
-    public string $editAssignedUser = ''; // //NIEUW: tijdelijke assignee tijdens inline edit
+    public array $selected = []; // geselecteerde ticket ids voor bulk-acties
+    public ?int $editingId = null; // huidige rij in inline edit
+    public string $editSubject = ''; // tijdelijk onderwerp voor inline edit
+    public string $editDescription = ''; // tijdelijke beschrijving voor inline edit
+    public string $editStatus = 'open'; // tijdelijke status voor inline edit
+    public string $editPriority = 'medium'; // tijdelijke prioriteit voor inline edit
+    public string $editWorkflow = 'new'; // tijdelijke workflow voor inline edit
+    public string $editAssignedUser = ''; // tijdelijke assignee voor inline edit
     public function updatingSearch(): void
     {
-        $this->resetPage(); // ga terug naar pagina 1 zodra de zoekterm verandert
+        $this->resetPage(); // ga naar pagina 1 bij nieuwe zoekterm
     }
     public function updatingStatus(): void
     {
-        $this->resetPage(); // ga terug naar pagina 1 zodra de statusfilter verandert
-}
+        $this->resetPage(); // ga naar pagina 1 bij nieuwe statusfilter
+    }
     public function updatingPriority(): void
     {
-        $this->resetPage(); // ga terug naar pagina 1 zodra de prioriteitsfilter verandert
-}
+        $this->resetPage(); // ga naar pagina 1 bij nieuwe prioriteitsfilter
+    }
     public function updatingWorkflow(): void
     {
-        $this->resetPage(); // //NIEUW: ga terug naar pagina 1 zodra workflowfilter verandert
-}
+        $this->resetPage(); // ga naar pagina 1 bij nieuwe workflowfilter
+    }
     public function updatingAssignedUser(): void
     {
-        $this->resetPage(); // //NIEUW: ga terug naar pagina 1 zodra assigneefilter verandert
-}
+        $this->resetPage(); // ga naar pagina 1 bij nieuwe assigneefilter
+    }
     public function updatingPerPage(): void
     {
-        $this->resetPage(); // ga terug naar pagina 1 zodra het aantal per pagina verandert
+        $this->resetPage(); // ga naar pagina 1 bij wijziging records per pagina
 }
     public function sortBy(string $field): void
     {
         $allowedFields = ['id', 'subject', 'status', 'priority',
-            'workflow_step', 'created_at']; // //NIEUW: workflow_step toegevoegd
+            'workflow_step', 'created_at']; // veilige sorteervelden
         if (! in_array($field, $allowedFields, true)) {
-            return; // stop als iemand een ongeldig sorteerveld probeert door te geven
+            return; // stop als ongeldig veld werd doorgegeven
+        }
+if ($this->sortField === $field) {
+    $this->sortDirection = $this->sortDirection === 'asc' ? 'desc' :
+        'asc'; // draai richting om op zelfde kolom
+} else {
+    $this->sortField = $field; // stel nieuwe kolom in
+    $this->sortDirection = 'asc'; // start nieuwe kolom op asc
 }
-        if ($this->sortField === $field) {
-            $this->sortDirection = $this->sortDirection === 'asc' ? 'desc' :
-                'asc'; // draai de sorteerrichting om op dezelfde kolom
-        } else {
-            $this->sortField = $field; // stel een nieuw sorteerveld in
-            $this->sortDirection = 'asc'; // start nieuwe kolom standaard ascendant
-}
-        $this->resetPage(); // zet pagination terug naar pagina 1 na sorteerwijziging
+$this->resetPage(); // herstart pagination na sorteerwijziging
 }
     public function clearFilters(): void
     {
         $this->search = ''; // wis zoekterm
         $this->status = ''; // wis statusfilter
         $this->priority = ''; // wis prioriteitsfilter
-        $this->workflow = ''; // //NIEUW: wis workflowfilter
-        $this->assignedUser = ''; // //NIEUW: wis assigneefilter
-        $this->sortField = 'created_at'; // herstel standaardsortering
+        $this->workflow = ''; // wis workflowfilter
+        $this->assignedUser = ''; // wis assigneefilter
+        $this->sortField = 'created_at'; // herstel standaard sorteerveld
         $this->sortDirection = 'desc'; // herstel standaard sorteerrichting
-        $this->perPage = 10; // herstel standaard aantal per pagina
-        $this->resetPage(); // ga terug naar pagina 1
+        $this->perPage = 10; // herstel standaard records per pagina
+        $this->resetPage(); // zet pagination terug op pagina 1
     }
     public function startEdit(int $ticketId): void
     {
-        $ticket = Ticket::find($ticketId); // haal het ticket op dat we inline willen bewerken
+        $ticket = Ticket::find($ticketId); // haal ticket op dat inline bewerkt moet worden
 if (! $ticket) {
-return; // stop als het ticket niet bestaat
+    return; // stop als ticket niet bestaat
 }
-$this->editingId = $ticket->id; // zet deze rij in edit mode
-$this->editSubject = $ticket->subject; // vul tijdelijk onderwerp in
-$this->editStatus = $ticket->status; // vul tijdelijke status in
-$this->editPriority = $ticket->priority; // vul tijdelijke prioriteit in
-$this->editWorkflow = $ticket->workflow_step; // //NIEUW: vul tijdelijke workflow in
+$this->editingId = $ticket->id; // zet huidige rij in edit mode
+$this->editSubject = $ticket->subject; // laad onderwerp in tijdelijke state
+$this->editDescription = $ticket->description; // laad beschrijving in tijdelijke state
+$this->editStatus = $ticket->status->value; // laad status als string
+$this->editPriority = $ticket->priority->value; // laad prioriteit als string
+$this->editWorkflow = $ticket->workflow_step->value; // laad workflow als string
 $this->editAssignedUser = $ticket->assigned_user_id ? (string)
-$ticket->assigned_user_id : ''; // //NIEUW: vul tijdelijke assignee in
+$ticket->assigned_user_id : ''; // laad assignee of lege string
 }
     public function cancelEdit(): void
     {
         $this->editingId = null; // verlaat edit mode
-        $this->editSubject = ''; // reset tijdelijk onderwerp
-        $this->editStatus = 'open'; // reset tijdelijke status
-        $this->editPriority = 'medium'; // reset tijdelijke prioriteit
-        $this->editWorkflow = 'new'; // //NIEUW: reset tijdelijke workflow
-        $this->editAssignedUser = ''; // //NIEUW: reset tijdelijke assignee
-    }
-    public function saveInline(int $ticketId): void
+        $this->editSubject = ''; // reset onderwerp
+        $this->editDescription = ''; // reset beschrijving
+        $this->editStatus = TicketStatus::Open->value; // reset status
+        $this->editPriority = TicketPriority::Medium->value; // reset prioriteit
+$this->editWorkflow = TicketWorkflowStep::New->value; // reset workflow
+$this->editAssignedUser = ''; // reset assignee
+}
+    public function saveInline(UpdateTicketAction $updateTicketAction, int
+                                                  $ticketId): void
     {
-        $ticket = Ticket::find($ticketId); // haal het ticket op dat inline bewerkt wordt
+        $ticket = Ticket::find($ticketId); // haal ticket op dat inline bewerkt wordt
 if (! $ticket) {
-    return; // stop als het ticket niet bestaat
+    return; // stop als ticket niet bestaat
 }
 $validated = $this->validate(
     [
         'editSubject' => 'required|min:3|max:255', // onderwerp moet geldig zijn
-        'editStatus' => 'required|in:open,in_progress,closed', // alleen geldige statussen
-        'editPriority' => 'required|in:low,medium,high', // alleen geldige prioriteiten
-        'editWorkflow' => 'required|in:new,triage,investigating,waiting_customer,resolved', // //NIEUW: alleen geldige workflowstappen
-        'editAssignedUser' => 'nullable|exists:users,id', // //NIEUW: assignment moet naar bestaande user verwijzen
+        'editDescription' => 'required|min:10', // beschrijving moet voldoende lang zijn
+        'editStatus' => 'required|in:' . implode(',', TicketStatus::values()), // alleen geldige statussen
+        'editPriority' => 'required|in:' . implode(',', TicketPriority::values()), // alleen geldige prioriteiten
+        'editWorkflow' => 'required|in:' . implode(',', TicketWorkflowStep::values()), // alleen geldige workflowstappen
+        'editAssignedUser' => 'nullable|exists:users,id', // assignment moet bestaande user zijn
 ],
 [
-    'editSubject.required' => 'Het onderwerp is verplicht.', //foutmelding voor leeg onderwerp
+    'editSubject.required' => 'Het onderwerp is verplicht.', // foutmelding voor leeg onderwerp
     'editSubject.min' => 'Het onderwerp moet minstens 3 tekens bevatten.', // foutmelding voor te kort onderwerp
     'editSubject.max' => 'Het onderwerp mag maximaal 255 tekens bevatten.', // foutmelding voor te lang onderwerp
+    'editDescription.required' => 'De beschrijving is verplicht.', // foutmelding voor lege beschrijving
+    'editDescription.min' => 'De beschrijving moet minstens 10 tekens bevatten.', // foutmelding voor te korte beschrijving
     'editStatus.required' => 'Kies een status.', // foutmelding voor ontbrekende status
     'editStatus.in' => 'De gekozen status is ongeldig.', // foutmelding voor ongeldige status
     'editPriority.required' => 'Kies een prioriteit.', // foutmelding voor ontbrekende prioriteit
     'editPriority.in' => 'De gekozen prioriteit is ongeldig.', // foutmelding voor ongeldige prioriteit
-    'editWorkflow.required' => 'Kies een workflow.', // //NIEUW: foutmelding voor ontbrekende workflow
-    'editWorkflow.in' => 'De gekozen workflow is ongeldig.', //NIEUW: foutmelding voor ongeldige workflow
-    'editAssignedUser.exists' => 'De gekozen behandelaar bestaat niet.',//NIEUW: foutmelding voor ongeldige assignee
+    'editWorkflow.required' => 'Kies een workflow.', // foutmelding voor ontbrekende workflow
+    'editWorkflow.in' => 'De gekozen workflow is ongeldig.', // foutmelding voor ongeldige workflow
+    'editAssignedUser.exists' => 'De gekozen behandelaar bestaat niet.', // foutmelding voor ongeldige assignee
 ]
 );
-        $oldWorkflow = $ticket->workflow_step; // //NIEUW: oude workflow bewaren voor logging
-        $oldAssignee = $ticket->assigneeName(); // //NIEUW: oude assignee bewaren voor logging
-        $ticket->update([
-            'subject' => $validated['editSubject'], // schrijf nieuw onderwerp weg
-            'status' => $validated['editStatus'], // schrijf nieuwe status weg
-            'priority' => $validated['editPriority'], // schrijf nieuwe prioriteit weg
-            'workflow_step' => $validated['editWorkflow'], // //NIEUW: schrijf nieuwe workflow weg
-            'assigned_user_id' => $validated['editAssignedUser'] !== '' ?
-                $validated['editAssignedUser'] : null, // //NIEUW: zet lege string om naar
-            null
+$updateTicketAction->execute($ticket, [
+    'subject' => $validated['editSubject'], // stuur onderwerp door naar action
+'description' => $validated['editDescription'], // stuur beschrijving door naar action
+'status' => $validated['editStatus'], // stuur status door naar action
+'priority' => $validated['editPriority'], // stuur prioriteit door naar action
+'workflow_step' => $validated['editWorkflow'], // stuur workflow door naar action
+'assigned_user_id' => $validated['editAssignedUser'], // stuur assignee door naar action
 ]);
-if ($oldWorkflow !== $ticket->workflow_step) {
-    $ticket->logActivity("Workflow inline gewijzigd van
-{$oldWorkflow} naar {$ticket->workflow_step}."); // //NIEUW: log workflowwijziging
+$this->cancelEdit(); // sluit inline edit af
+session()->flash('success', 'Het ticket werd inline bijgewerkt.'); // toon succesmelding
 }
-if ($oldAssignee !== $ticket->assigneeName()) {
-    $ticket->logActivity("Behandelaar inline gewijzigd van
-{$oldAssignee} naar {$ticket->assigneeName()}."); // //NIEUW: log assignmentwijziging
-}
-$this->cancelEdit(); // sluit edit mode opnieuw af
-session()->flash('success', 'Het ticket werd inline bijgewerkt.'); // toon succesfeedback
-}
-    public function changeStatus(int $ticketId, string $status): void
+    public function changeStatus(ChangeTicketStatusAction
+                                 $changeTicketStatusAction, int $ticketId, string $status): void
     {
-$allowedStatuses = ['open', 'in_progress', 'closed']; // whitelist van geldige statussen
-if (! in_array($status, $allowedStatuses, true)) {
-    return; // stop als de status ongeldig is
+        if (! in_array($status, TicketStatus::values(), true)) {
+            return; // stop bij ongeldige status
+        }
+        $ticket = Ticket::find($ticketId); // haal ticket op
+        if (! $ticket) {
+            return; // stop als ticket niet bestaat
+        }
+        $changeTicketStatusAction->execute($ticket, $status); // voer snelle statusupdate uit
+session()->flash('success', 'De status van het ticket werd succesvol aangepast.'); // toon succesmelding
 }
-$ticket = Ticket::find($ticketId); // zoek het ticket op basis van zijn id
-if (! $ticket) {
-    return; // stop als het ticket niet meer bestaat
-}
-$ticket->update([
-    'status' => $status, // schrijf de nieuwe status weg
-]);
-$ticket->logActivity("Status snel gewijzigd naar {$status}."); //
-//NIEUW: log snelle statuswijziging
-session()->flash('success', 'De status van het ticket werd succesvol aangepast.'); // toon feedback bovenaan
-}
-    public function delete(int $ticketId): void
+    public function delete(DeleteTicketAction $deleteTicketAction, int
+                                              $ticketId): void
     {
-        $ticket = Ticket::find($ticketId); // zoek het ticket op basis van zijn id
-if (! $ticket) {
-    return; // stop als het ticket niet bestaat
-}
-$ticket->delete(); // verwijder het ticket uit de database
+        $ticket = Ticket::find($ticketId); // haal ticket op
+        if (! $ticket) {
+            return; // stop als ticket niet bestaat
+        }
+        $deleteTicketAction->execute($ticket); // laat action ticket verwijderen
 $this->selected = array_values(array_filter(
     $this->selected,
-    fn ($id) => (int) $id !== $ticketId // haal verwijderd ticket ook uit bulkselectie
+    fn ($id) => (int) $id !== $ticketId // haal verwijderd ticket uit bulkselectie
 ));
 if ($this->editingId === $ticketId) {
     $this->cancelEdit(); // sluit edit mode als net die rij verwijderd werd
 }
 session()->flash('success', 'Het ticket werd succesvol verwijderd.');
-// toon feedback bovenaan
-$this->resetPage(); // blijf op een geldige pagina na delete
+// toon succesmelding
+$this->resetPage(); // houd pagination geldig
 }
-    public function bulkClose(): void
-{
-if (empty($this->selected)) {
-return; // stop als er niets geselecteerd is
+    public function bulkClose(BulkCloseTicketsAction
+                              $bulkCloseTicketsAction): void
+    {
+        if (empty($this->selected)) {
+            return; // stop als niets geselecteerd is
+        }
+        $count = $bulkCloseTicketsAction->execute($this->selected); // voer bulk close uit
+$this->selected = []; // wis selectie na actie
+session()->flash('success', "{$count} ticket(s) werden op gesloten gezet."); // toon succesmelding
 }
-Ticket::query()
-    ->whereIn('id', $this->selected) // neem alleen geselecteerde tickets
-    ->update([
-        'status' => 'closed', // zet alle geselecteerde tickets op gesloten
-    ]);
-$count = count($this->selected); // tel hoeveel records aangepast werden
-$this->selected = []; // maak selectie leeg na bulk-actie
-session()->flash('success', "{$count} ticket(s) werden op gesloten gezet."); // toon succesfeedback
-}
-public function bulkDelete(): void
-{
-    if (empty($this->selected)) {
-        return; // stop als er niets geselecteerd is
-    }
-    Ticket::query()
-        ->whereIn('id', $this->selected) // neem alleen geselecteerde tickets
-    ->delete(); // verwijder alle geselecteerde tickets
-$count = count($this->selected); // tel hoeveel records verwijderd werden
-$this->selected = []; // reset selectie na bulk delete
+    public function bulkDelete(BulkDeleteTicketsAction
+                               $bulkDeleteTicketsAction): void
+    {
+        if (empty($this->selected)) {
+            return; // stop als niets geselecteerd is
+        }
+        $count = $bulkDeleteTicketsAction->execute($this->selected); // voer bulk delete uit
+$this->selected = []; // wis selectie na actie
 if ($this->editingId !== null) {
     $this->cancelEdit(); // sluit eventuele open edit mode
 }
 session()->flash('success', "{$count} ticket(s) werden verwijderd.");
-// toon succesfeedback
-$this->resetPage(); // zorg dat pagination geldig blijft
+// toon succesmelding
+
+$this->resetPage(); // houd pagination geldig
 }
-public function selectCurrentPage(): void
-{
-    $this->selected = $this->tickets->pluck('id')->map(fn ($id) =>
-    (string) $id)->toArray(); // selecteer alle tickets van huidige pagina
+    public function selectCurrentPage(): void
+    {
+        $this->selected = $this->tickets->pluck('id')->map(fn ($id) =>
+        (string) $id)->toArray(); // selecteer alle ids van huidige pagina
+    }
+    public function clearSelection(): void
+    {
+        $this->selected = []; // wis alle geselecteerde ids
+    }
+    #[Computed]
+    public function activeFilterCount(): int
+    {
+        $count = 0; // start teller op nul
+        if ($this->search !== '') {
+            $count++; // tel zoekterm mee
+        }
+        if ($this->status !== '') {
+            $count++; // tel statusfilter mee
+        }
+        if ($this->priority !== '') {
+            $count++; // tel prioriteitsfilter mee
+        }
+        if ($this->workflow !== '') {
+            $count++; // tel workflowfilter mee
+        }
+        if ($this->assignedUser !== '') {
+            $count++; // tel assigneefilter mee
+        }
+        return $count; // geef totaal actieve filters terug
+    }
+    #[Computed]
+    public function assignees()
+    {
+        return User::query()
+            ->orderBy('name') // sorteer mogelijke assignees alfabetisch
+            ->get(); // haal mogelijke assignees op
+    }
+    #[Computed]
+    public function tickets()
+    {
+        return app(TicketIndexQuery::class)->execute([
+            'search' => $this->search, // zoekterm doorgeven aan query class
+'status' => $this->status, // statusfilter doorgeven
+'priority' => $this->priority, // prioriteitsfilter doorgeven
+'workflow' => $this->workflow, // workflowfilter doorgeven
+'assigned_user_id' => $this->assignedUser, // assigneefilter doorgeven
+'sortField' => $this->sortField, // sorteerveld doorgeven
+'sortDirection' => $this->sortDirection, // sorteerrichting doorgeven
+'perPage' => $this->perPage, // aantal per pagina doorgeven
+]);
 }
-public function clearSelection(): void
-{
-    $this->selected = []; // wis alle geselecteerde ids
+    public function statusOptions(): array
+    {
+        return TicketStatus::options(); // statusopties centraal uit enum
+    }
+    public function priorityOptions(): array
+    {
+        return TicketPriority::options(); // prioriteitsopties centraal uit enum
 }
-#[Computed]
-public function activeFilterCount(): int
-{
-    $count = 0; // start teller op nul
-    if ($this->search !== '') {
-        $count++; // tel zoekterm mee
-    }
-    if ($this->status !== '') {
-        $count++; // tel statusfilter mee
-    }
-    if ($this->priority !== '') {
-        $count++; // tel prioriteitsfilter mee
-    }
-    if ($this->workflow !== '') {
-        $count++; // //NIEUW: tel workflowfilter mee
-    }
-    if ($this->assignedUser !== '') {
-        $count++; // //NIEUW: tel assigneefilter mee
-    }
-    return $count; // geef aantal actieve filters terug
-}
-#[Computed]
-public function assignees()
-{
-    return User::query()
-        ->orderBy('name') // //NIEUW: alfabetisch sorteren
-        ->get(); // //NIEUW: mogelijke assignees ophalen
-}
-#[Computed]
-public function tickets()
-{
-    return Ticket::query()
-        ->with('assignee') // //NIEUW: eager load toegewezen gebruiker
-        ->when($this->search !== '', function ($query) {
-            $query->where(function ($subQuery) {
-                $subQuery->where('subject', 'like', '%' . $this->search .
-                    '%')
-                    ->orWhere('description', 'like', '%' .
-                        $this->search . '%'); // zoek in onderwerp of beschrijving
-            });
-        })
-        ->when($this->status !== '', function ($query) {
-$query->where('status', $this->status); // filter op gekozen status
-})
-        ->when($this->priority !== '', function ($query) {
-            $query->where('priority', $this->priority); // filter op gekozen prioriteit
-})
-        ->when($this->workflow !== '', function ($query) {
-            $query->where('workflow_step', $this->workflow); // //NIEUW: filter op workflow
-})
-        ->when($this->assignedUser !== '', function ($query) {
-            $query->where('assigned_user_id', $this->assignedUser); //NIEUW: filter op assignee
-        })
-        ->orderBy($this->sortField, $this->sortDirection) // pas sortering toe
-    ->paginate($this->perPage); // geef paginated resultaat terug
+    public function workflowOptions(): array
+    {
+        return TicketWorkflowStep::options(); // workflowopties centraal uit enum
 }
 };
 ?>
@@ -298,21 +293,22 @@ $query->where('status', $this->status); // filter op gekozen status
                     Tickets overzicht
                 </h1>
                 <p class="mt-2 text-sm text-gray-600">
-                    Beheer support tickets rechtstreeks vanuit één interactieve Livewire werkpagina.
+                    Beheer support tickets rechtstreeks vanuit één
+                    interactieve Livewire werkpagina.
                 </p>
             </div>
             <div class="flex flex-wrap items-center gap-3">
                 <button
                     type="button"
                     wire:click="clearFilters"
-                    class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm font-medium
-                     text-gray-700 shadow-sm transition hover:bg-gray-50">
+                    class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-3
+                     text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50">
                     Filters resetten
                 </button>
                 <a
                     href="{{ route('tickets.create') }}"
-                    class="inline-flex items-center rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold
-                     text-white shadow-sm transition hover:bg-blue-700">
+                    class="inline-flex items-center rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white
+                     shadow-sm transition hover:bg-blue-700">
                     Nieuw ticket
                 </a>
             </div>
@@ -337,24 +333,24 @@ $query->where('status', $this->status); // filter op gekozen status
                         placeholder="Zoek op onderwerp of beschrijving">
                 </div>
                 <div>
-                    <label for="status" class="mb-2 block text-sm font-medium
-                    text-gray-700">
+                    <label for="status" class="mb-2 block text-sm font-medium text-gray-700">
                         Status
                     </label>
                     <select
                         id="status"
                         wire:model.live="status"
                         class="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm shadow-sm focus:border-blue-500
-                         focus:outline-none focus:ring-2
-                         focus:ring-blue-500">
+                         focus:outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="">Alle statussen</option>
-                        <option value="open">Open</option>
-                        <option value="in_progress">In behandeling</option>
-                        <option value="closed">Gesloten</option>
+                        @foreach ($this->statusOptions() as $option)
+                            <option value="{{ $option['value'] }}">
+                                {{ $option['label'] }}
+                            </option>
+                        @endforeach
                     </select>
                 </div>
                 <div>
-                    <label for="priority" class="mb-2 block text-sm font-medium text-gray-700">
+                    <label for="priority" class="mb-2 block text-sm fontmedium text-gray-700">
                         Prioriteit
                     </label>
                     <select
@@ -363,9 +359,11 @@ $query->where('status', $this->status); // filter op gekozen status
                         class="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm shadow-sm focus:border-blue-500
                          focus:outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="">Alle prioriteiten</option>
-                        <option value="low">Laag</option>
-                        <option value="medium">Normaal</option>
-                        <option value="high">Hoog</option>
+                        @foreach ($this->priorityOptions() as $option)
+                            <option value="{{ $option['value'] }}">
+                                {{ $option['label'] }}
+                            </option>
+                        @endforeach
                     </select>
                 </div>
                 <div>
@@ -376,14 +374,13 @@ $query->where('status', $this->status); // filter op gekozen status
                         id="workflow"
                         wire:model.live="workflow"
                         class="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm shadow-sm focus:border-blue-500
-                         focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
+                         focus:outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="">Alle stappen</option>
-                        <option value="new">Nieuw</option>
-                        <option value="triage">Triage</option>
-                        <option value="investigating">Onderzoek</option>
-                        <option value="waiting_customer">Wacht op klant</option>
-                        <option value="resolved">Opgelost</option>
+                        @foreach ($this->workflowOptions() as $option)
+                            <option value="{{ $option['value'] }}">
+                                {{ $option['label'] }}
+                            </option>
+                        @endforeach
                     </select>
                 </div>
                 <div>
@@ -398,7 +395,7 @@ $query->where('status', $this->status); // filter op gekozen status
                         <option value="">Iedereen</option>
                         @foreach ($this->assignees as $assignee)
                             <option value="{{ $assignee->id }}">
-                                {{ $assignee->name }} {{-- //NIEUW: mogelijke behandelaar --}}
+                                {{ $assignee->name }}
                             </option>
                         @endforeach
                     </select>
@@ -411,7 +408,8 @@ $query->where('status', $this->status); // filter op gekozen status
                         id="perPage"
                         wire:model.live="perPage"
                         class="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm shadow-sm focus:border-blue-500
-                         focus:outline-none focus:ring-2 focus:ring-blue-500">
+                         focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
                         <option value="5">5</option>
                         <option value="10">10</option>
                         <option value="25">25</option>
@@ -420,15 +418,15 @@ $query->where('status', $this->status); // filter op gekozen status
                 </div>
             </div>
             <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-gray-600">
+<span class="inline-flex items-center rounded-full bg-gray100 px-3 py-1 font-medium text-gray-700">
+Actieve filters: {{ $this->activeFilterCount }}
+</span>
                 <span class="inline-flex items-center rounded-full bg-gray100 px-3 py-1 font-medium text-gray-700">
-                    Actieve filters: {{ $this->activeFilterCount }}
-                </span>
+Geselecteerd: {{ count($selected) }}
+</span>
                 <span class="inline-flex items-center rounded-full bg-gray100 px-3 py-1 font-medium text-gray-700">
-                    Geselecteerd: {{ count($selected) }}
-                </span>
-                <span class="inline-flex items-center rounded-full bg-gray100 px-3 py-1 font-medium text-gray-700">
-                    Totaal op deze pagina: {{ $this->tickets->count() }}
-                </span>
+Totaal op deze pagina: {{ $this->tickets->count() }}
+</span>
             </div>
         </div>
         <div class="mb-6 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray200">
@@ -446,15 +444,17 @@ $query->where('status', $this->status); // filter op gekozen status
                     <button
                         type="button"
                         wire:click="selectCurrentPage"
-                        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2
-                         text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50">
+                        class="inline-flex items-center rounded-lg border
+border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
+                    >
                         Selecteer huidige pagina
                     </button>
                     <button
                         type="button"
                         wire:click="clearSelection"
-                        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2
-                         text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50">
+                        class="inline-flex items-center rounded-lg border
+border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
+                    >
                         Wis selectie
                     </button>
                     <button
@@ -462,8 +462,8 @@ $query->where('status', $this->status); // filter op gekozen status
                         wire:click="bulkClose"
                         wire:loading.attr="disabled"
                         wire:target="bulkClose"
-                        class="inline-flex items-center rounded-lg bg-green600 px-4 py-2 text-sm font-semibold text-white
-                         shadow-sm transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50">
+                        class="inline-flex items-center rounded-lg bg-green600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bggreen-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
                         Zet selectie op gesloten
                     </button>
                     <button
@@ -472,8 +472,9 @@ $query->where('status', $this->status); // filter op gekozen status
                         wire:confirm="Weet je zeker dat je alle geselecteerde tickets wilt verwijderen?"
                         wire:loading.attr="disabled"
                         wire:target="bulkDelete"
-                        class="inline-flex items-center rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white
-                         shadow-sm transition hover:bg-red700 disabled:cursor-not-allowed disabled:opacity-50">
+                        class="inline-flex items-center rounded-lg bg-red-600
+px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
                         Verwijder selectie
                     </button>
                 </div>
@@ -576,9 +577,19 @@ $query->where('status', $this->status); // filter op gekozen status
                                                 wire:model="editSubject"
                                                 class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
                                                  shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2
-                                                  focus:ring-blue-500"
-                                            >
+                                                  focus:ring-blue-500">
                                             @error('editSubject')
+                                            <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                                            @enderror
+                                        </div>
+                                        <div>
+                                            <textarea
+                                                rows="3"
+                                                wire:model="editDescription"
+                                                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm
+                                                 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            ></textarea>
+                                            @error('editDescription')
                                             <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
                                             @enderror
                                         </div>
@@ -589,52 +600,48 @@ $query->where('status', $this->status); // filter op gekozen status
                                                     class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
                                                      shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2
                                                       focus:ring-blue-500">
-                                                    <option
-                                                        value="open">Open</option>
-                                                    <option
-                                                        value="in_progress">In behandeling</option>
-                                                    <option
-                                                        value="closed">Gesloten</option>
+                                                    @foreach ($this->statusOptions() as $option)
+                                                        <option
+                                                            value="{{ $option['value'] }}">
+                                                            {{ $option['label'] }}
+                                                        </option>
+                                                    @endforeach
                                                 </select>
                                                 @error('editStatus')
-                                                <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                                                <p class="mt-2 textsm text-red-600">{{ $message }}</p>
                                                 @enderror
                                             </div>
                                             <div>
                                                 <select
                                                     wire:model="editPriority"
-                                                    class="w-full rounded-lg border border-gray-300 px-3
-                                                     py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none
-                                                      focus:ring-2 focus:ring-blue-500">
-                                                    <option
-                                                        value="low">Laag</option>
-                                                    <option
-                                                        value="medium">Normaal</option>
-                                                    <option
-                                                        value="high">Hoog</option>
+                                                    class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm
+                                                     focus:border-blue-500 focus:outline-none focus:ring-2
+                                                      focus:ring-blue-500">
+                                                    @foreach ($this->priorityOptions() as $option)
+                                                        <option
+                                                            value="{{ $option['value'] }}">
+                                                            {{ $option['label'] }}
+                                                        </option>
+                                                    @endforeach
                                                 </select>
                                                 @error('editPriority')
-                                                <p class="mt-2 textsm text-red-600">{{ $message }}</p>
+                                                <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
                                                 @enderror
                                             </div>
                                         </div>
-                                        <div class="grid gap-3 md:gridcols-2">
+                                        <div class="grid gap-3 md:grid-cols-2">
                                             <div>
                                                 <select
                                                     wire:model="editWorkflow"
                                                     class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
                                                      shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2
                                                       focus:ring-blue-500">
-                                                    <option
-                                                        value="new">Nieuw</option>
-                                                    <option
-                                                        value="triage">Triage</option>
-                                                    <option
-                                                        value="investigating">Onderzoek</option>
-                                                    <option
-                                                        value="waiting_customer">Wacht op klant</option>
-                                                    <option
-                                                        value="resolved">Opgelost</option>
+                                                    @foreach ($this->workflowOptions() as $option)
+                                                        <option
+                                                            value="{{ $option['value'] }}">
+                                                            {{ $option['label'] }}
+                                                        </option>
+                                                    @endforeach
                                                 </select>
                                                 @error('editWorkflow')
                                                 <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
@@ -674,9 +681,7 @@ $query->where('status', $this->status); // filter op gekozen status
                                             <button
                                                 type="button"
                                                 wire:click="cancelEdit"
-                                                class="inline-flex items-center rounded-lg border border-gray-300
-                                                 bg-white px-4 py-2 text-xs font-medium text-gray-700 shadow-sm
-                                                  transition hover:bg-gray-50">
+                                                class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs fontmedium text-gray-700 shadow-sm transition hover:bg-gray-50">
                                                 Annuleren
                                             </button>
                                         </div>
@@ -685,7 +690,8 @@ $query->where('status', $this->status); // filter op gekozen status
                                     <div class="text-sm font-semibold text-gray-900">
                                         <a
                                             href="{{ route('tickets.show', $ticket) }}"
-                                            class="transition hover:text-blue-600 hover:underline">
+                                            class="transition hover:text-blue-600 hover:underline"
+                                        >
                                             {{ $ticket->subject }}
                                         </a>
                                     </div>
@@ -696,12 +702,13 @@ $query->where('status', $this->status); // filter op gekozen status
                             </td>
                             <td class="whitespace-nowrap px-6 py-4 text-sm">
                                 @if ($editingId === $ticket->id)
-                                    <span class="inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                                    <span class="inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs
+                                     font-semibold text-blue-700">
                                         Inline edit actief
                                     </span>
                                 @else
                                     <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold {{ $ticket->statusBadgeClasses() }}">
-                                        {{ $ticket->statusLabel() }}
+                                    {{ $ticket->statusLabel() }}
                                     </span>
                                 @endif
                             </td>
@@ -712,7 +719,7 @@ $query->where('status', $this->status); // filter op gekozen status
                                     </span>
                                 @else
                                     <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold {{ $ticket->priorityBadgeClasses() }}">
-                                        {{ $ticket->priorityLabel() }}
+                                    {{ $ticket->priorityLabel() }}
                                     </span>
                                 @endif
                             </td>
@@ -724,19 +731,17 @@ $query->where('status', $this->status); // filter op gekozen status
                                 @else
                                     <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold {{ $ticket->workflowBadgeClasses() }}">
                                         {{ $ticket->workflowLabel() }}
-                                        {{-- //NIEUW: workflowbadge --}}
                                     </span>
                                 @endif
                             </td>
                             <td class="whitespace-nowrap px-6 py-4 text-sm text-gray-700">
                                 @if ($editingId === $ticket->id)
-                                    <span class="inline-flex rounded-full
-                                    bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                                    {{ $editAssignedUser !== '' ? 'Assignee gekozen' : 'Niet toegewezen' }} {{-- //NIEUW: tijdelijke assignee
-                                    feedback --}}
+                                    <span class="inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs
+                                     font-semibold text-blue-700">
+                                        {{ $editAssignedUser !== '' ? 'Assignee gekozen' : 'Niet toegewezen' }}
                                     </span>
                                 @else
-                                    {{ $ticket->assigneeName() }} {{--//NIEUW: toegewezen medewerker --}}
+                                    {{ $ticket->assigneeName() }}
                                 @endif
                             </td>
                             <td class="whitespace-nowrap px-6 py-4 text-sm text-gray-600">
@@ -749,8 +754,8 @@ $query->where('status', $this->status); // filter op gekozen status
                                         wire:click="changeStatus({{ $ticket->id }}, 'open')"
                                         wire:loading.attr="disabled"
                                         wire:target="changeStatus({{ $ticket->id }}, 'open')"
-                                        class="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-3
-                                         py-2 text-xs font-medium text-blue-700 transition hover:bg-blue-100
+                                        class="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50
+                                         px-3 py-2 text-xs font-medium text-blue-700 transition hover:bg-blue-100
                                           disabled:cursor-not-allowed disabled:opacity-50">
                                         Open
                                     </button>
@@ -771,7 +776,7 @@ $query->where('status', $this->status); // filter op gekozen status
                                         wire:target="changeStatus({{ $ticket->id }}, 'closed')"
                                         class="inline-flex items-center rounded-lg border border-green-200 bg-green-50
                                          px-3 py-2 text-xs font-medium text-green-700 transition hover:bg-green-100
-                                          disabled:cursor-not-allowed disabled:opacity-50">
+                                         disabled:cursor-not-allowed disabled:opacity-50">
                                         Gesloten
                                     </button>
                                 </div>
@@ -782,25 +787,23 @@ $query->where('status', $this->status); // filter op gekozen status
                                         <button
                                             type="button"
                                             wire:click="cancelEdit"
-                                            class="inline-flex items-center rounded-lg border border-gray-300
-                                             bg-white px-3 py-2 text-xs font-medium text-gray-700 shadow-sm
-                                              transition hover:bg-gray-50">
+                                            class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs fontmedium text-gray-700 shadow-sm transition hover:bg-gray-50">
                                             Stop edit
                                         </button>
                                     @else
                                         <button
                                             type="button"
                                             wire:click="startEdit({{ $ticket->id }})"
-                                            class="inline-flex items-center rounded-lg border border-indigo-300
-                                             bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700 shadow-sm
-                                              transition hover:bg-indigo-100">
+                                            class="inline-flex items-center rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs
+                                             font-medium text-indigo-700 shadow-sm transition hover:bg-indigo-100"
+                                        >
                                             Inline edit
                                         </button>
                                     @endif
                                     <a
                                         href="{{ route('tickets.show', $ticket) }}"
-                                        class="inline-flex items-center rounded-lg border border-gray-300 bg-white
-                                         px-3 py-2 text-xs font-medium text-gray-700 shadow-sm transition hover:bg-gray-50">
+                                        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3
+                                         py-2 text-xs font-medium text-gray-700 shadow-sm transition hover:bg-gray-50">
                                         Openen
                                     </a>
                                     <button
@@ -809,9 +812,9 @@ $query->where('status', $this->status); // filter op gekozen status
                                         wire:confirm="Weet je zeker dat je dit ticket wilt verwijderen?"
                                         wire:loading.attr="disabled"
                                         wire:target="delete({{ $ticket->id }})"
-                                        class="inline-flex items-center rounded-lg bg-red-600 px-3 py-2 text-xs
-                                         font-semibold text-white shadow-sm transition hover:bg-red-700
-                                          disabled:cursor-not-allowed disabled:opacity-50">
+                                        class="inline-flex items-center rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold
+                                        text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed
+                                         disabled:opacity-50">
                                         Verwijderen
                                     </button>
                                 </div>
